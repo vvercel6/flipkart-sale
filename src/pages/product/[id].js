@@ -437,12 +437,6 @@ const DeliveryTracker = () => {
         </div>
       </div>
 
-      <div className="pincode-row">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffc200" strokeWidth="2"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="2.5"/></svg>
-        <span className="pincode-text">Deliver to <strong>Ahmedabad, 380001</strong></span>
-        <span className="change-link">Change</span>
-      </div>
-
       <style jsx>{`
         .delivery-tracker {
           background: #fff;
@@ -591,15 +585,29 @@ const ProductSpecs = ({ data }) => {
 
   return (
     <div className="specs-section">
-      <h3 className="specs-title">Product Specifications</h3>
-      <div className="specs-table">
-        {specs.map((spec, i) => (
-          <div key={i} className={`spec-row ${i % 2 === 0 ? 'even' : ''}`}>
-            <span className="spec-label">{spec.label}</span>
-            <span className="spec-value">{spec.value}</span>
-          </div>
-        ))}
-      </div>
+      <div className="mt-4 space-y-1">
+  <img
+    src="/assets/images/review_1.jpg"
+    alt="Review"
+    className="w-full rounded"
+  />
+  <img
+    src="/assets/images/review_2.jpg"
+    alt="Review"
+    className="w-full rounded"
+  />
+  <img
+    src="/assets/images/review_3.jpg"
+    alt="Review"
+    className="w-full rounded"
+  />
+  <img
+    src="/assets/images/review_4.jpg"
+    alt="Review"
+    className="w-full rounded"
+  />
+</div>
+
       <style jsx>{`
         .specs-section {
           background: #fff;
