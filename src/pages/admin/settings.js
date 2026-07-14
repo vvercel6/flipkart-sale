@@ -19,6 +19,9 @@ export default function SettingsPage() {
       name: '',
       Gpay: true,
       Phonepe: true,
+      Phonepe2: false,
+      Phonepe2UpiId: '',
+      Phonepe2Name: 'Flipkart Seller',
       Paytm: true,
       Bhim: true,
       WPay: false,
@@ -38,7 +41,16 @@ export default function SettingsPage() {
       currency: 'INR',
       currencySymbol: '₹',
     },
+    payment: {
+      codEnabled: true,
+      onlinePaymentEnabled: true,
+      cashfreeEnabled: false,
+      cashfreeAppId: '',
+      cashfreeSecretKey: '',
+      cashfreeMode: 'sandbox',
+    },
   });
+  const [showSecret, setShowSecret] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -53,7 +65,14 @@ export default function SettingsPage() {
 
       const data = await response.json();
       if (data.success) {
-        setSettings(data.data);
+        setSettings(prev => ({
+          ...prev,
+          ...data.data,
+          payment: {
+            ...prev.payment,
+            ...(data.data.payment || {})
+          }
+        }));
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -90,6 +109,7 @@ export default function SettingsPage() {
 
   const tabs = [
     { id: 'upi', label: 'UPI Payment', icon: FiCreditCard },
+    { id: 'cashfree', label: 'Cashfree Gateway', icon: FiCreditCard },
     { id: 'tracking', label: 'Analytics & Tracking', icon: FiTrendingUp },
     { id: 'site', label: 'Site Settings', icon: FiGlobe },
     { id: 'general', label: 'General', icon: FiSettings },
@@ -208,6 +228,7 @@ export default function SettingsPage() {
                       {[
                         { key: 'Gpay', label: 'Google Pay', color: 'bg-blue-500' },
                         { key: 'Phonepe', label: 'PhonePe', color: 'bg-purple-500' },
+                        { key: 'Phonepe2', label: 'PhonePe 2 (Direct Merchant Pay)', color: 'bg-purple-700' },
                         { key: 'Paytm', label: 'Paytm', color: 'bg-indigo-500' },
                         { key: 'Bhim', label: 'BHIM UPI', color: 'bg-orange-500' },
                         { key: 'WPay', label: 'W-Pay', color: 'bg-green-500' },
@@ -225,7 +246,7 @@ export default function SettingsPage() {
                           <input
                             type="checkbox"
                             className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
-                            checked={settings.upi[method.key]}
+                            checked={settings.upi[method.key] || false}
                             onChange={(e) =>
                               setSettings({
                                 ...settings,
@@ -239,6 +260,50 @@ export default function SettingsPage() {
                         </label>
                       ))}
                     </div>
+
+                    {settings.upi.Phonepe2 && (
+                      <div className="p-4 bg-purple-50 border border-purple-100 rounded-lg mt-4 space-y-4">
+                        <h4 className="font-bold text-purple-950 text-sm">PhonePe 2 (Direct Pay) Settings</h4>
+                        
+                        <div>
+                          <label className="label text-purple-900 text-xs font-semibold">PhonePe 2 UPI ID (pa)</label>
+                          <input
+                            type="text"
+                            className="input border-purple-200 focus:border-purple-500 focus:ring-purple-500"
+                            placeholder="shivfashion710704.rzp@rxairtel"
+                            value={settings.upi.Phonepe2UpiId || ''}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                upi: {
+                                  ...settings.upi,
+                                  Phonepe2UpiId: e.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </div>
+
+                        <div>
+                          <label className="label text-purple-900 text-xs font-semibold">PhonePe 2 Merchant Name (pn / tn)</label>
+                          <input
+                            type="text"
+                            className="input border-purple-200 focus:border-purple-500 focus:ring-purple-500"
+                            placeholder="Flipkart Seller"
+                            value={settings.upi.Phonepe2Name || ''}
+                            onChange={(e) =>
+                              setSettings({
+                                ...settings,
+                                upi: {
+                                  ...settings.upi,
+                                  Phonepe2Name: e.target.value,
+                                },
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <button
@@ -491,6 +556,127 @@ export default function SettingsPage() {
                   <FiSave className="mr-2" />
                   {saving ? 'Saving...' : 'Save Site Settings'}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* Cashfree Gateway Tab */}
+          {activeTab === 'cashfree' && (
+            <div className="space-y-6">
+              <div className="card">
+                <h2 className="text-xl font-bold text-gray-900 mb-4">
+                  Cashfree Gateway Configuration
+                </h2>
+
+                <div className="space-y-4">
+                  {/* Enable Gateway Toggle */}
+                  <label className="flex items-center justify-between p-4 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+                    <div className="flex items-center">
+                      <div className="w-3 h-3 rounded-full bg-primary-500 mr-3"></div>
+                      <div>
+                        <span className="font-semibold text-gray-900 block">Enable Cashfree Gateway</span>
+                        <span className="text-xs text-gray-500">Allow customers to pay via card, netbanking, wallets, etc.</span>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="w-5 h-5 text-primary-600 rounded focus:ring-primary-500"
+                      checked={settings.payment?.cashfreeEnabled || false}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          payment: {
+                            ...settings.payment,
+                            cashfreeEnabled: e.target.checked,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+
+                  {/* App ID */}
+                  <div>
+                    <label className="label">Cashfree App ID (Client ID)</label>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="e.g. TEST10384725abc9"
+                      value={settings.payment?.cashfreeAppId || ''}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          payment: {
+                            ...settings.payment,
+                            cashfreeAppId: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+
+                  {/* Secret Key */}
+                  <div>
+                    <label className="label">Cashfree Secret Key</label>
+                    <div className="relative">
+                      <input
+                        type={showSecret ? 'text' : 'password'}
+                        className="input pr-10"
+                        placeholder="Enter your Cashfree Secret Key"
+                        value={settings.payment?.cashfreeSecretKey || ''}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            payment: {
+                              ...settings.payment,
+                              cashfreeSecretKey: e.target.value,
+                            },
+                          })
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700"
+                        onClick={() => setShowSecret(!showSecret)}
+                      >
+                        {showSecret ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Environment Mode */}
+                  <div>
+                    <label className="label">Gateway Mode</label>
+                    <select
+                      className="input"
+                      value={settings.payment?.cashfreeMode || 'sandbox'}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          payment: {
+                            ...settings.payment,
+                            cashfreeMode: e.target.value,
+                          },
+                        })
+                      }
+                    >
+                      <option value="sandbox">Sandbox (Test Mode)</option>
+                      <option value="production">Production (Live Mode)</option>
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Use sandbox for testing payments without actual money. Switch to production for real transactions.
+                    </p>
+                  </div>
+
+                  {/* Save Button */}
+                  <button
+                    onClick={() => handleSave('payment')}
+                    disabled={saving}
+                    className="btn btn-primary w-full mt-4"
+                  >
+                    <FiSave className="mr-2" />
+                    {saving ? 'Saving...' : 'Save Cashfree Settings'}
+                  </button>
+                </div>
               </div>
             </div>
           )}

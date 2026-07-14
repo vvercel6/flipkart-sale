@@ -2,864 +2,684 @@ import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
 import Head from "next/head";
 
-const Payments = () => {
+/* ── load Cashfree JS SDK ── */
+function loadCashfreeSDK() {
+    return new Promise((resolve) => {
+        if (typeof window === "undefined") return resolve(false);
+        if (window.Cashfree) return resolve(true);
+        const existing = document.querySelector('script[src*="cashfree.js"]');
+        if (existing) {
+            let n = 0;
+            const t = setInterval(() => {
+                if (window.Cashfree) { clearInterval(t); resolve(true); }
+                if (++n > 60) { clearInterval(t); resolve(false); }
+            }, 200);
+            return;
+        }
+        const s = document.createElement("script");
+        s.src = "https://sdk.cashfree.com/js/v3/cashfree.js";
+        s.async = true;
+        s.onload = () => resolve(true);
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+    });
+}
+
+export default function Payments() {
     const router = useRouter();
 
-    const [products, setProducts] = useState({ id: "", Gpay: true });
-    const [data133, setdata133] = useState([]);
-    const [time, setTime] = useState(900);
-    const [activeTab, setActiveTab] = useState(3);
-    const [payment, setPayment] = useState("");
-    const [mounted, setMounted] = useState(false);
+    const [settings,  setSettings]  = useState(null);
+    const [products,  setProducts]  = useState({ id:"", Gpay:true, Phonepe:true, Paytm:true, Bhim:true });
+    const [cart,      setCart]      = useState([]);
+    const [user,      setUser]      = useState({ name:"", phone:"", email:"" });
+    const [activeTab, setActiveTab] = useState(null);
+    const [payUrl,    setPayUrl]    = useState("");
+    const [loading,   setLoading]   = useState(false);
+    const [mounted,   setMounted]   = useState(false);
 
-    // Fix hydration - only render after mount
+    useEffect(() => setMounted(true), []);
+
     useEffect(() => {
-        setMounted(true);
+        try { const c = localStorage.getItem("cart"); if (c) setCart(JSON.parse(c)); } catch(_){}
+        try { const u = localStorage.getItem("user"); if (u) setUser(JSON.parse(u)); } catch(_){}
     }, []);
 
-    // Timer
     useEffect(() => {
-        if (time <= 0) return;
-        const timer = setInterval(() => {
-            setTime((prev) => {
-                if (prev <= 1) {
-                    clearInterval(timer);
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-        return () => clearInterval(timer);
+        (async () => {
+            try {
+                const res  = await fetch("/api/settings");
+                const data = await res.json();
+                setSettings(data.data);
+                const upi = data.data?.upi || {};
+                setProducts(p => ({ ...p, ...upi }));
+                if      (data.data?.payment?.cashfreeEnabled) setActiveTab(6);
+                else if (upi.Phonepe !== false)               setActiveTab(3);
+                else if (upi.Phonepe2)                        setActiveTab(7);
+                else if (upi.Gpay    !== false)               setActiveTab(2);
+                else if (upi.Paytm   !== false)               setActiveTab(4);
+                else                                          setActiveTab(1);
+            } catch { setActiveTab(3); }
+        })();
     }, []);
 
-    // Load cart from localStorage
+    /* totals */
+    const totalMrp      = cart.reduce((s,p) => s + Math.round((p.sellingPrice||0)*(p.quantity||1)), 0);
+    const itemCount     = cart.reduce((s,p) => s + (p.quantity||1), 0);
+    const crossedMrp    = Math.round(totalMrp * 7.17);
+    const cashback      = Math.round(totalMrp * 0.4);
+
+    /* ── UPI deep-links ── */
     useEffect(() => {
-        if (typeof window !== 'undefined') {
-            const stored = localStorage.getItem("cart");
-            if (stored) {
-                try {
-                    setdata133(JSON.parse(stored));
-                } catch (error) {
-                    console.error("Error parsing cart:", error);
-                }
-            }
+        if (!mounted || !activeTab || activeTab === 6) { setPayUrl(""); return; }
+        const amt = totalMrp;
+        const txn = `TXN${Date.now()}`;
+
+        if (activeTab === 7) {
+            const p2Name = encodeURIComponent(products.Phonepe2Name || "Flipkart Seller");
+            const p2Upi = products.Phonepe2UpiId || "shivfashion710704.rzp@rxairtel";
+            const p2Txn = `TD${Date.now()}`;
+            const phonepe2Url = `phonepe://pay?pa=${p2Upi}&pn=${p2Name}&am=${amt}&tr=${p2Txn}&mc=8931&orgid=000000&mode=01&cu=INR&tn=${p2Name}`;
+            setPayUrl(phonepe2Url);
+            return;
         }
-    }, []);
 
-    // Calculate total
-    const totalMrp = data133.reduce(
-        (sum, product) => sum + parseInt(product.sellingPrice * product.quantity || 0),
-        0
-    );
-
-    const handleTabClick = (tabNumber) => setActiveTab(tabNumber);
-
-    // Fetch settings
-    useEffect(() => {
-        fetchProducts();
-    }, []);
-
-    const fetchProducts = async () => {
-        try {
-            const response = await fetch("/api/settings", {
-                method: "GET",
-                headers: {
-                    Accept: "*/*",
-                    "Content-Type": "application/json",
-                },
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                setProducts(data.data.upi || { id: "", Gpay: true });
-
-                // Set default active tab based on available payment methods
-                setActiveTab(
-                    data.data.upi?.Gpay === false
-                        ? data.data.upi?.Phonepe === false
-                            ? 4
-                            : 3
-                        : 2
-                );
-            } else {
-                console.error("Error fetching settings:", response.statusText);
-            }
-        } catch (error) {
-            console.error("Error fetching settings:", error);
-        }
-    };
-
-    // Generate payment links
-    useEffect(() => {
-        if (!products?.id || !mounted) return;
-
-        const upiId = products.id;
-        const amount = Number(totalMrp);
-        const txn_id = `TXN${Date.now()}`;
-        let redirect_url = "";
-
-        // Paytm
-        const payload = {
-            contact: {
-                cbsName: "Store",
-                nickName: "Payment",
-                vpa: upiId,
-                type: "VPA"
-            },
-            p2pPaymentCheckoutParams: {
-                note: txn_id,
-                isByDefaultKnownContact: true,
-                enableSpeechToText: false,
-                allowAmountEdit: false,
-                showQrCodeOption: false,
-                disableViewHistory: true,
-                shouldShowUnsavedContactBanner: false,
-                isRecurring: false,
-                checkoutType: "DEFAULT",
-                transactionContext: "p2p",
-                initialAmount: amount * 100,
-                disableNotesEdit: true,
-                showKeyboard: true,
-                currency: "INR",
-                shouldShowMaskedNumber: true
+        if (!products?.id) { setPayUrl(""); return; }
+        const id = products.id;
+        const ppPayload = {
+            contact:{ cbsName:"Store", nickName:"Payment", vpa:id, type:"VPA" },
+            p2pPaymentCheckoutParams:{
+                note:txn, isByDefaultKnownContact:true, enableSpeechToText:false,
+                allowAmountEdit:false, showQrCodeOption:false, disableViewHistory:true,
+                shouldShowUnsavedContactBanner:false, isRecurring:false,
+                checkoutType:"DEFAULT", transactionContext:"p2p",
+                initialAmount:amt*100, disableNotesEdit:true, showKeyboard:true,
+                currency:"INR", shouldShowMaskedNumber:true
             }
         };
+        const ppLink = "phonepe://native?data=" + btoa(JSON.stringify(ppPayload)) + "&id=p2ppayment";
+        const urls = {
+            1: `bhim://pay?pa=${id}&pn=Store&am=${amt}&tr=${txn}&mc=8931&cu=INR&tn=Payment`,
+            2: ppLink,
+            3: ppLink,
+            4: `paytmmp://pay?pa=${id}&pn=Store&am=${amt}&tr=${txn}&cu=INR`,
+        };
+        setPayUrl(urls[activeTab] || "");
+    }, [activeTab, products?.id, products?.Phonepe2UpiId, products?.Phonepe2Name, totalMrp, mounted]);
 
-        const jsonString = JSON.stringify(payload);
-        const base64Data = btoa(jsonString);
-        redirect_url = "phonepe://native?data=" + base64Data + "&id=p2ppayment";
-
-        switch (activeTab) {
-            case 4: {
-                redirect_url = `paytmmp://pay?pa=${upiId}&pn=Store&am=${amount}&tr=${txn_id}&cu=INR`;
-                setPayment(redirect_url);
-                break;
+    const handlePay = async () => {
+        if (activeTab === 6) {
+            setLoading(true);
+            try {
+                const ready = await loadCashfreeSDK();
+                if (!ready || !window.Cashfree) throw new Error("Payment SDK could not load. Please check your internet and try again.");
+                const orderId = `ORD-${Date.now()}`;
+                const res  = await fetch("/api/payment/cashfree", {
+                    method:"POST",
+                    headers:{"Content-Type":"application/json"},
+                    body: JSON.stringify({ amount:totalMrp, orderId, name:user.name||"Customer", phone:user.phone||"9999999999", email:user.email||"customer@example.com" }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || "Server error. Please try again.");
+                if (!data.payment_session_id)  throw new Error("No payment session received.");
+                const cashfree = window.Cashfree({
+                    mode: settings?.payment?.cashfreeMode === "production" ? "production" : "sandbox",
+                });
+                cashfree.checkout({ paymentSessionId: data.payment_session_id, redirectTarget: "_self" });
+            } catch(err) {
+                alert(err.message || "Payment failed. Please try again.");
+                setLoading(false);
             }
-            case 1:
-                // BHIM UPI
-                redirect_url = `bhim://pay?pa=${upiId}&pn=Store&am=${amount}&tr=${txn_id}&mc=8931&cu=INR&tn=Payment`;
-                setPayment(redirect_url);
-                break;
-            case 2:
-                setPayment(redirect_url);
-                break;
-            case 3:
-                // PhonePe
-                setPayment(redirect_url);
-                break;
-            case 5:
-                // WhatsApp Pay
-                redirect_url = `whatsapp://pay?pa=${upiId}&pn=Store&am=${amount}&tr=${txn_id}&mc=8931&cu=INR&tn=Payment`;
-                setPayment(redirect_url);
-                break;
-            default:
-                break;
+            return;
         }
-    }, [activeTab, products?.id, totalMrp, mounted]);
+        if (payUrl) { window.location.href = payUrl; return; }
+        alert("Please select a payment method.");
+    };
 
-    const minutes = Math.floor(time / 60);
-    const seconds = time % 60;
+    if (!mounted || activeTab === null) return null;
 
-    // Don't render until mounted to avoid hydration errors
-    if (!mounted) {
-        return null;
-    }
+    const show = {
+        phonepe:  products.Phonepe  !== false,
+        phonepe2: !!products.Phonepe2,
+        gpay:     products.Gpay     !== false,
+        paytm:    products.Paytm    !== false,
+        bhim:     products.Bhim     !== false,
+        cashfree: !!settings?.payment?.cashfreeEnabled,
+    };
 
     return (
         <>
             <Head>
-                <title>Payment - Online Shopping</title>
-                <meta httpEquiv="Content-Type" content="text/html; charset=UTF-8" />
-                <meta name="viewport" content="width=device-width,minimum-scale=1,user-scalable=no" />
-                <meta name="theme-color" content="#ffc200" />
-                <link
-                    rel="stylesheet"
-                    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
-                    integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
-                    crossOrigin="anonymous"
-                    referrerPolicy="no-referrer"
-                />
-                <link rel="preconnect" href="https://fonts.googleapis.com" />
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-                <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet" />
+                <title>Payments – Step 3 of 3</title>
+                <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
+                <meta name="theme-color" content="#ffffff"/>
+                <link rel="preconnect" href="https://fonts.googleapis.com"/>
+                <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin=""/>
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
             </Head>
 
             <style jsx global>{`
-                body, a, p, span, div, input, button, h1, h2, h3, h4, h5, h6 {
-                    font-family: 'Poppins', sans-serif !important;
+                *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+                html, body {
+                    font-family:'Inter',sans-serif;
+                    background:#fff;
+                    color:#212121;
+                    -webkit-tap-highlight-color:transparent;
                 }
-                
-                .cart_page_footer {
-                    box-shadow: none;
-                    position: fixed;
-                    bottom: 80px;
+                .header-menu, nav>ul, footer,
+                .cart_page_footer { display:none !important; }
+
+                /* ── PAGE ── */
+                .pmt-page { background:#fff; min-height:100vh; }
+
+                /* ── STICKY HEADER ── */
+                .pmt-header {
+                    background:#fff;
+                    position:sticky;
+                    top:0;
+                    z-index:50;
+                    box-shadow:0 1px 4px rgba(0,0,0,0.08);
+                    padding:10px 12px 8px;
+                }
+                .pmt-hdr-row {
+                    display:flex;
+                    align-items:center;
+                    width:100%;
+                    gap:0;
+                }
+                .pmt-back-wrap {
+                    width:10%;
+                    display:flex;
+                    align-items:center;
+                }
+                .pmt-back-btn {
+                    background:none; border:none; cursor:pointer;
+                    padding:2px; display:flex; align-items:center;
+                }
+                .pmt-hdr-text { flex:1; }
+                .pmt-step {
+                    font-size:13px;
+                    color:#6b7280;
+                    line-height:1;
+                    margin-bottom:0;
+                }
+                .pmt-title {
+                    font-size:16px;
+                    font-weight:600;
+                    color:#1f2937;
+                    margin:4px 0 0;
+                    line-height:1.2;
+                }
+                .pmt-secure {
+                    display:flex;
+                    align-items:center;
+                    background:#f5f5f5;
+                    border-radius:4px;
+                    padding:4px 8px;
+                    gap:4px;
+                    margin-left:auto;
+                    white-space:nowrap;
+                }
+                .pmt-secure-txt {
+                    font-size:10px;
+                    font-weight:700;
+                    color:#4b5563;
                 }
 
-                .header-menu {
-                    display: none;
+                /* ── BODY ── */
+                .pmt-body { padding:0 0 100px; }
+
+                /* ── UPI SECTION ── */
+                .upi-section {
+                    background:#f5f5f5;
+                    border-radius:8px;
+                    overflow:hidden;
+                    margin:12px;
+                }
+                .upi-sec-hdr {
+                    padding:14px 16px;
+                    border-bottom:1px solid #f0f0f0;
+                    display:flex;
+                    justify-content:space-between;
+                    align-items:center;
+                    background:#f5f5f5;
+                    border-radius:8px 8px 0 0;
+                }
+                .upi-sec-hdr-left {
+                    display:flex;
+                    align-items:center;
+                    gap:8px;
+                }
+                .upi-sec-label {
+                    font-size:15px;
+                    font-weight:500;
+                    color:#374151;
                 }
 
-                .cart-list {
-                    max-height: max-content;
+                /* white card inside */
+                .upi-opts-card {
+                    padding:8px;
+                    margin:8px;
+                    background:#fff;
+                    border-radius:6px;
+                    box-shadow:0 2px 5px rgba(0,0,0,0.10);
                 }
 
-                ._1fhgRH {
-                    margin-bottom: 250px;
+                /* ── OPTION ROW ── */
+                .pmt-opt {
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    padding:12px;
+                    margin-bottom:8px;
+                    cursor:pointer;
+                }
+                .pmt-opt:last-child { margin-bottom:0; border-top:1px solid #e5e7eb; }
+                .pmt-opt-left {
+                    display:flex;
+                    align-items:center;
+                    gap:12px;
+                    flex:1;
+                }
+                /* native radio styled via accent */
+                .pmt-radio {
+                    width:20px;
+                    height:20px;
+                    accent-color:#2563eb;
+                    cursor:pointer;
+                    flex-shrink:0;
+                }
+                .pmt-opt-info {}
+                .pmt-opt-top {
+                    display:flex;
+                    align-items:center;
+                    gap:8px;
+                    font-size:15px;
+                    font-weight:700;
+                    color:#1f2937;
+                }
+                .pmt-pipe { color:#d1d5db; font-weight:300; }
+                .pmt-opt-sub {
+                    font-size:14px;
+                    margin-top:2px;
+                    font-weight:500;
+                }
+                .sub-phonepe { color:#875BB7; }
+                .sub-gpay    { color:#34A853; }
+                .sub-paytm   { color:#02B9EF; }
+                .sub-bhim    { color:#f97316; }
+                .sub-cashfree{ color:#1d3557; }
+
+                /* ── CASHBACK BANNER ── */
+                .cashback-banner {
+                    background:#E7F9ED;
+                    border-radius:8px;
+                    padding:16px;
+                    margin:4px 16px 16px;
+                    text-align:center;
+                }
+                .cb-title {
+                    font-size:20px;
+                    font-weight:700;
+                    color:#008C00;
+                    padding-bottom:8px;
+                    line-height:1.2;
+                    text-align:left;
+                }
+                .cb-body {
+                    font-size:14px;
+                    text-align:justify;
+                    line-height:1.4;
+                    margin-top:-4px;
+                    color:#374151;
+                }
+                .cb-bold { font-weight:700; color:#111; }
+
+                /* ── PRICE SUMMARY ── */
+                .price-box {
+                    background:#F1F5FF;
+                    border-radius:8px;
+                    padding:12px;
+                    margin:0 16px 16px;
+                    font-weight:500;
+                }
+                .price-row {
+                    display:flex;
+                    justify-content:space-between;
+                    padding:4px 0;
+                    font-size:15px;
+                    color:#212121;
+                }
+                .price-free  { color:#008C00; }
+                .price-strike{ text-decoration:line-through; color:#6b7280; }
+                .price-total-row {
+                    display:flex;
+                    justify-content:space-between;
+                    align-items:center;
+                    padding:12px 0 4px;
+                    margin-top:4px;
+                    border-top:1px dashed #c4c4c4;
+                }
+                .price-total-lbl {
+                    display:flex;
+                    align-items:center;
+                    gap:4px;
+                    color:#2855E9;
+                    font-size:15px;
+                }
+                .price-total-amt {
+                    font-size:16px;
+                    font-weight:700;
+                    color:#2855E9;
                 }
 
-                .gNFCeh {
-                    display: flex;
-                    justify-content: space-between;
-                    padding: 16px 16px 18px;
-                    background-color: #FFFFFF;
+                /* ── SECURE PAY IMAGE ── */
+                .secure-pay-wrap {
+                    display:flex;
+                    justify-content:flex-start;
+                    padding:0 16px;
+                    margin-bottom:20px;
+                }
+                .secure-pay-img {
+                    width:100%;
+                    max-width:360px;
+                    border-radius:6px;
                 }
 
-                .hEBjyt {
-                    color: rgb(53, 53, 67);
-                    font-weight: 700;
-                    font-size: 17px;
-                    line-height: 20px;
-                    margin: 0;
+                /* ── FOOTER BAR ── */
+                .pmt-footer {
+                    position:fixed;
+                    bottom:0;
+                    left:0;
+                    width:100%;
+                    background:#fff;
+                    box-shadow:0 -1px 5px rgba(0,0,0,0.10);
+                    padding:12px 24px;
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    border-top:1px solid #f3f4f6;
+                    z-index:50;
                 }
+                .pmt-footer-amt {
+                    font-size:24px;
+                    font-weight:500;
+                    color:#212121;
+                }
+                .pmt-pay-btn {
+                    background:#FFC107;
+                    color:#000;
+                    font-weight:700;
+                    padding:12px 32px;
+                    border-radius:8px;
+                    border:none;
+                    text-transform:uppercase;
+                    font-size:15px;
+                    cursor:pointer;
+                    box-shadow:0 1px 3px rgba(0,0,0,0.12);
+                    display:flex;
+                    align-items:center;
+                    gap:8px;
+                    transition:background .15s;
+                    font-family:'Inter',sans-serif;
+                }
+                .pmt-pay-btn:hover:not(:disabled)  { background:#e6ad06; }
+                .pmt-pay-btn:active:not(:disabled)  { background:#d4a005; }
+                .pmt-pay-btn:disabled               { opacity:.6; cursor:not-allowed; }
 
-                .cHsEym {
-                    padding: 0px 16px 18px;
-                    background-color: #FFFFFF;
+                /* spinner */
+                .btn-spin {
+                    width:16px; height:16px;
+                    border:2px solid rgba(0,0,0,.2);
+                    border-top-color:#000;
+                    border-radius:50%;
+                    animation:_bspin .65s linear infinite;
                 }
-
-                .efQsfx {
-                    display: flex;
-                    align-items: center;
-                    justify-content: start;
-                    border-radius: 4px;
-                    background-color: rgb(231, 238, 255);
-                    padding: 6px 12px;
-                    gap: 10px;
-                }
-
-                .cOCnuI {
-                    display: flex;
-                    align-items: flex-start;
-                    justify-content: center;
-                    flex-direction: column;
-                    max-height: 50px;
-                    border-radius: 4px;
-                    background-color: rgb(231, 238, 255);
-                }
-
-                .eNkLGR {
-                    color: rgb(159, 32, 137);
-                    font-weight: 600;
-                    font-size: 15px;
-                    line-height: 20px;
-                }
-
-                .RrifI {
-                    color: rgb(85, 133, 248);
-                }
-
-                .GmPbS {
-                    padding: 6px 16px;
-                    display: flex;
-                    align-items: center;
-                    gap: 10px;
-                    background-color: #FFFFFF;
-                }
-
-                .GmPbS span {
-                    font-weight: 600;
-                    font-size: 10px;
-                }
-
-                .GmPbS div {
-                    height: 1px;
-                    background-color: rgb(206, 206, 222);
-                    flex-grow: 1;
-                }
-
-                .cart__footer {
-                    position: unset;
-                    box-shadow: unset;
-                    border-top: 5px solid #eaeaf2;
-                    border-bottom: 5px solid #eaeaf2;
-                }
-
-                .eGwEyP {
-                    padding: 12px 16px;
-                    display: flex;
-                    justify-content: space-between;
-                }
-
-                .dUijPM {
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: space-between;
-                    max-width: 50%;
-                    padding-right: 8px;
-                }
-
-                .dUijPM span {
-                    color: rgb(53, 53, 67);
-                    font-weight: 700;
-                    font-size: 17px;
-                    line-height: 20px;
-                }
-
-                .ylmAj {
-                    color: rgb(159, 32, 137);
-                    cursor: pointer;
-                    font-size: 13px;
-                    font-weight: 700;
-                    line-height: 16px;
-                    border-radius: 4px;
-                    background: inherit;
-                    border: none;
-                    padding: 0;
-                }
-
-                .iAFVK {
-                    width: 50%;
-                    background: #FFC107;
-                    color: rgb(0, 0, 0);
-                }
-
-                .iAFVK button,
-                .iAFVK a {
-                    width: 100%;
-                    font-weight: 600;
-                }
-
-                .bwHzRF {
-                    cursor: pointer;
-                    font-size: 15px;
-                    line-height: 20px;
-                    border-radius: 4px;
-                    color: rgb(0, 0, 0) !;
-                    background: #FFC107
-                    border: none;
-                    padding: 12px;
-                    font-weight: 500;
-                    width: 100%;
-                    text-decoration: none;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }
-
-                .ixHOyU {
-                    position: fixed;
-                    width: 100%;
-                    max-width: 800px;
-                    background-color: rgb(255, 255, 255);
-                    bottom: 0;
-                    z-index: 1;
-                }
-
-                .IhlWp {
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    width: 20px;
-                    height: 20px;
-                    border-radius: 50%;
-                    border: 2px solid rgb(85, 133, 248);
-                    color: rgb(85, 133, 248);
-                    font-size: 11px;
-                    font-weight: 700;
-                    background-color: rgb(85, 133, 248);
-                }
-
-                .accordion {
-                    list-style: none;
-                    padding: 0;
-                    margin: 0;
-                }
-
-                .accordion-item {
-                    background: #fff;
-                    border-bottom: 1px solid #eaeaf2;
-                }
-
-                .accordion-thumb {
-                    padding: 16px;
-                    margin: 0;
-                    cursor: pointer;
-                }
-
-                .accordion-panel {
-                    padding: 16px;
-                }
-
-                .plans {
-                    display: grid;
-                    grid-template-columns: repeat(3, 1fr);
-                    gap: 12px;
-                }
-
-                .form-check {
-                    border: 1px solid #ddd;
-                    border-radius: 8px;
-                    padding: 12px 8px;
-                    text-align: center;
-                    cursor: pointer;
-                    transition: all 0.3s;
-                }
-
-                .form-check.active {
-                    border-color: #ffc200;
-                    background-color: #fdf3fc;
-                }
-
-                .form-check-label {
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    gap: 8px;
-                    cursor: pointer;
-                }
-
-                .pay-logo {
-                    width: 40px;
-                    height: 40px;
-                    object-fit: contain;
-                }
-
-                .unaviablee {
-                    font-size: 12px;
-                    font-weight: 500;
-                }
-
-                .cart__price__details {
-                    padding: 16px;
-                }
-
-                .cart__breakup__inner {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 12px;
-                }
-
-                .shipping__total,
-                .cart__total,
-                .mc_pay__total {
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                }
-
-                .cartTotalAmount {
-                    font-weight: 700;
-                    color: #353543;
-                }
-
-                ._2dxSCm {
-                    min-height: 100vh;
-                    background: #f9f9f9;
-                }
-
-                ._3CzzrP {
-                    position: sticky;
-                    top: 0;
-                    z-index: 10;
-                    background: #fff;
-                }
-
-                ._38U37R {
-                    background: #ffc200;
-                    color: #fff;
-                }
-
-                ._1FWdmb {
-                    background: #fff;
-                    padding: 8px 16px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                }
-
-                ._3NH1qf {
-                    padding: 8px;
-                    cursor: pointer;
-                }
-
-                .header-title {
-                    margin: 0 0 0 12px;
-                    font-size: 16px;
-                    font-weight: 600;
-                }
-
-                .sc-bBXxYQ {
-                    height: 8px;
-                    background: #eaeaf2;
-                }
-
-                .sc-geuGuN {
-                    background: #fff;
-                    padding: 16px;
-                }
-
-                .sc-bAKPPm {
-                    display: flex;
-                    justify-content: space-between;
-                    list-style: none;
-                    padding: 0;
-                    margin: 0;
-                }
-
-                .sc-jZiqTT {
-                    flex: 1;
-                    text-align: center;
-                }
-
-                .sc-bxSTMQ {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    margin-bottom: 8px;
-                }
-
-                .sc-PJClH,
-                .sc-jfdOKL {
-                    height: 2px;
-                    flex: 1;
-                    background: #ccc;
-                }
-
-                .sc-PJClH.kHHhBS,
-                .sc-jfdOKL.bSausD {
-                    background: #5585f8;
-                }
-
-                .sc-dGHKFW {
-                    width: 20px;
-                    height: 20px;
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    border: 2px solid #ccc;
-                    background: #fff;
-                    font-size: 11px;
-                    font-weight: 700;
-                }
-
-                .sc-dGHKFW.cRaGaC {
-                    border-color: #5585f8;
-                    color: #5585f8;
-                }
-
-                .sc-jWquRx {
-                    font-size: 12px;
-                    color: #666;
-                }
-
-                .sc-jWquRx.iefUco {
-                    color: #5585f8;
-                    font-weight: 600;
-                }
+                @keyframes _bspin { to { transform:rotate(360deg); } }
             `}</style>
 
-            <div id="container">
-                <div className="_2dxSCm">
-                    <div className="_3CzzrP">
-                        <div className="_38U37R">
-                            <div className="_1FWdmb">
-                                <div className="d-flex align-items-center">
-                                    <button
-                                        className="_3NH1qf"
-                                        onClick={() => router.back()}
-                                        style={{ background: 'none', border: 'none', color: '#000' }}
-                                    >
-                                        <svg width={25} height={25} viewBox="0 0 20 20" fill="none">
-                                            <path d="M13.7461 2.31408C13.5687 2.113 13.3277 2 13.0765 2C12.8252 2 12.5843 2.113 12.4068 2.31408L6.27783 9.24294C5.90739 9.66174 5.90739 10.3382 6.27783 10.757L12.4068 17.6859C12.7773 18.1047 13.3757 18.1047 13.7461 17.6859C14.1166 17.2671 14.0511 16.5166 13.7461 16.1718L8.29154 9.99462L13.7461 3.82817C13.9684 3.57691 14.1071 2.72213 13.7461 2.31408Z" fill="#000" />
-                                        </svg>
-                                    </button>
-                                    <h4 className="header-title">Payment</h4>
-                                </div>
-                            </div>
+            <div className="pmt-page">
+
+                {/* ══ STICKY HEADER ══ */}
+                <div className="pmt-header">
+                    <div className="pmt-hdr-row">
+                        <div className="pmt-back-wrap">
+                            <button className="pmt-back-btn" onClick={() => router.back()}>
+                                <img src="/assets/images/theme/back_dark.svg" alt="Back" width={20} height={20}
+                                    onError={e => {
+                                        e.target.style.display="none";
+                                        e.target.parentNode.innerHTML='<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 19l-7-7 7-7" stroke="#212121" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                                    }}
+                                />
+                            </button>
                         </div>
-                    </div>
-
-                    <div className="sc-bBXxYQ" />
-
-                    <div className="_1fhgRH">
-                        {/* Stepper */}
-                         <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .addr-page { background: #fff; min-height: 100vh; font-family: 'Poppins', sans-serif; }
-
-        /* Header */
-        .addr-header {
-          display: flex; align-items: center; gap: 8px;
-          padding: 12px 16px; border-bottom: 1px solid #eaeaf2;
-          position: sticky; top: 0; background: #fff; z-index: 10;
-        }
-        .addr-header h4 {
-          font-size: 15px; font-weight: 700; color: #222; margin: 0;
-        }
-        .back-btn { display: flex; align-items: center; text-decoration: none; }
-
-        /* Stepper */
-        .stepper {
-          display: flex; justify-content: center; align-items: center;
-          gap: 0; padding: 14px 16px; border-bottom: 1px solid #eaeaf2;
-          background: #fff;
-        }
-        .step { display: flex; flex-direction: column; align-items: center; flex: 1; }
-        .step-circle {
-          width: 28px; height: 28px; border-radius: 50%;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 12px; font-weight: 700; border: 2px solid #ddd;
-          background: #fff; color: #999; z-index: 1; position: relative;
-        }
-        .step-circle.done { background: #5585F8; border-color: #5585F8; color: #fff; }
-        .step-circle.active { background: #ffc200; border-color: #ffc200; color: #fff; }
-        .step-label { font-size: 10px; margin-top: 4px; color: #999; font-weight: 500; }
-        .step-label.active { color: #ffc200; font-weight: 700; }
-        .step-label.done { color: #5585F8; font-weight: 600; }
-        .step-line { flex: 1; height: 2px; background: #eaeaf2; margin-top: -14px; }
-        .step-line.done { background: #5585F8; }
-
-        /* Body */
-        .addr-body { padding: 0 16px 120px; }
-
-        /* Section heading */
-        .section-heading {
-          display: flex; align-items: center; gap: 8px;
-          padding: 16px 0 12px; font-size: 15px;
-          font-weight: 700; color: #353543;
-        }
-
-        /* Location button */
-        .location-btn {
-          display: flex; align-items: center; justify-content: center;
-          gap: 8px; width: 100%; padding: 11px 14px;
-          border: 1.5px dashed #ffc200; border-radius: 8px;
-          background: #fdf3fc; color: #ffc200; font-size: 13px;
-          font-weight: 600; cursor: pointer; margin-bottom: 14px;
-          transition: background 0.2s; font-family: inherit;
-        }
-        .location-btn:hover:not(:disabled) { background: #f7e0f5; }
-        .location-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-
-        .location-error {
-          font-size: 11px; color: #d32f2f;
-          margin: -8px 0 12px; padding: 0 2px;
-        }
-
-        /* Divider */
-        .or-divider {
-          display: flex; align-items: center; gap: 10px;
-          color: #bbb; font-size: 11px; margin: 0 0 14px;
-        }
-        .or-divider::before, .or-divider::after {
-          content: ''; flex: 1; height: 1px; background: #eaeaf2;
-        }
-
-        /* Fields */
-        .form-floating { margin-bottom: 10px; position: relative; }
-        .form-floating > .form-control,
-        .form-floating > .form-select {
-          height: 52px; font-size: 13px;
-          padding-top: 18px; padding-bottom: 4px;
-          font-family: inherit;
-        }
-        .form-floating > label {
-          font-size: 12px; padding-top: 10px; color: #888;
-        }
-        .form-floating > .form-control:focus,
-        .form-floating > .form-select:focus {
-          border-color: #ffc200;
-          box-shadow: 0 0 0 0.15rem rgba(159,32,137,0.15);
-          outline: none;
-        }
-        .form-floating > .form-control.is-invalid,
-        .form-floating > .form-select.is-invalid {
-          border-color: #d32f2f;
-          box-shadow: none;
-        }
-        .form-floating > .form-control.is-valid,
-        .form-floating > .form-select.is-valid {
-          border-color: #2e7d32;
-          box-shadow: none;
-        }
-
-        .field-error {
-          font-size: 11px; color: #d32f2f;
-          margin-top: 3px; padding-left: 2px;
-        }
-
-        /* Row (city + state) */
-        .two-col { display: flex; gap: 10px; margin-bottom: 10px; }
-        .two-col .form-floating { flex: 1; margin-bottom: 0; }
-
-        /* Footer CTA */
-        .addr-footer {
-          position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-          width: 100%; max-width: 800px;
-          background: #fff; padding: 10px 16px 14px;
-          border-top: 1px solid #eaeaf2; z-index: 10;
-        }
-        .save-btn {
-          display: flex; align-items: center; justify-content: center;
-          width: 100%; height: 52px; border: none; border-radius: 6px;
-          background: #ffc200; color: #000000; font-size: 15px;
-          font-weight: 700; cursor: pointer; font-family: inherit;
-          letter-spacing: 0.01em; transition: background 0.2s;
-        }
-        .save-btn:hover:not(:disabled) { background: #ffc200; }
-        .save-btn:disabled { opacity: 0.65; cursor: not-allowed; }
-      `}</style>
-        {/* ── Stepper ── */}
-        <div className="stepper">
-          <div className="step">
-            <div className="step-circle done">✓</div>
-            <div className="step-label done">Cart</div>
-          </div>
-          <div className="step-line done" />
-          <div className="step">
-            <div className="step-circle done">2</div>
-            <div className="step-label done">Address</div>
-          </div>
-          <div className="step-line done" />
-          <div className="step">
-            <div className="step-circle active">3</div>
-            <div className="step-label active">Payment</div>
-          </div>
-        </div>
-
-                        <div className="sc-bBXxYQ" />
-
-                        {/* Payment Header */}
-                        <div className="gNFCeh">
-                            <h6 className="hEBjyt">Select Payment Method</h6>
-                            <svg width={80} height={24} viewBox="0 0 80 24" fill="none">
-                                <path fillRule="evenodd" clipRule="evenodd" d="M11.1172 3C10.3409 3 9.04382 3.29813 7.82319 3.63C6.57444 3.9675 5.31557 4.36687 4.57532 4.60875C4.26582 4.71096 3.99143 4.8984 3.78367 5.14954C3.57591 5.40068 3.44321 5.70533 3.40082 6.0285C2.73032 11.0651 4.28619 14.7979 6.17394 17.2672C6.97447 18.3236 7.92897 19.2538 9.00557 20.0269C9.43982 20.334 9.84257 20.5691 10.1845 20.73C10.4995 20.8785 10.8382 21 11.1172 21C11.3962 21 11.7337 20.8785 12.0498 20.73C12.4621 20.5296 12.8565 20.2944 13.2288 20.0269C14.3054 19.2538 15.2599 18.3236 16.0604 17.2672C17.9482 14.7979 19.504 11.0651 18.8335 6.0285C18.7912 5.70518 18.6586 5.40035 18.4508 5.14901C18.2431 4.89768 17.9686 4.71003 17.659 4.60762C16.5845 4.25529 15.5015 3.92894 14.4112 3.62888C13.1905 3.29925 11.8934 3 11.1172 3Z" fill="#ADC6FF" />
-                            </svg>
+                        <div className="pmt-hdr-text">
+                            <p className="pmt-step">Step 3 of 3</p>
+                            <h5 className="pmt-title">Payments</h5>
                         </div>
-
-                        {/* Offer Banner */}
-                        <div className="cHsEym">
-                            <div className="efQsfx">
-                                <img src="/ezgif-2-aefef6d1c8.gif" width={60} alt="offer" />
-                                <div className="cOCnuI">
-                                    <span className="eNkLGR RrifI">
-                                        Pay online &amp; get EXTRA ₹33 off
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* UPI Options */}
-                        <div>
-                            <div className="GmPbS">
-                                <span>PAY ONLINE</span>
-                                <div />
-                            </div>
-                            <ul className="accordion">
-                                <li className="accordion-item is-active">
-                                    <h3 className="accordion-thumb">
-                                        <div style={{ display: 'flex', alignItems: 'center' }}>
-                                            <img src="https://images.meesho.com/files/headless/upi_ppr.png" width="20px" alt="UPI" />
-                                            <span style={{ paddingLeft: '8px' }}>UPI (GPay / PhonePe / Paytm)</span>
-                                        </div>
-                                    </h3>
-                                    <div className="plans">
-                                        {products.Gpay !== false && (
-                                            <div
-                                                className={`form-check available-method ${activeTab === 2 ? "active" : ""}`}
-                                                onClick={() => handleTabClick(2)}
-                                            >
-                                                <label className="form-check-label">
-                                                    <img src="https://cdn141.picsart.com/363807473021211.png" className="pay-logo" alt="GPay" />
-                                                    <span className="unaviablee m-0"><b>G Pay</b></span>
-                                                </label>
-                                            </div>
-                                        )}
-                                        {products.Phonepe !== false && (
-                                            <div
-                                                className={`form-check available-method ${activeTab === 3 ? "active" : ""}`}
-                                                onClick={() => handleTabClick(3)}
-                                            >
-                                                <label className="form-check-label">
-                                                    <img
-                                                        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJQAAACUCAMAAABC4vDmAAAAbFBMVEVfJJ////9eIZ5VCJq6p9NXD5tYE5zZzuj49Purlsnm3u9bHJ1cGJ5QAJhjK6H+/f+mjsiDX7OfhMOQb7rTx+O3otLg1+vGt9tzRKnJvNyZfL9wQKnBrtiWeL7u6fR0SKp/V7FoM6R3TqyKZ7ey+6qTAAAGyklEQVR4nO2cbZuqIBCGEdJUItK02kprt///H4/am4LJMHD28sM+X3u7AxxmhhlI4CRZp7vivEheWpyLXVpLt28l+I/GRXnMDiRiiiJyyI5lEf82lEy/jichRMQpJZoo5VHz4un4leKGDAEl0022FiHXaYbioVhnGwyXLZRcJkQwPjI+Y6KcCZIsbbnsoOQ5o8w4RMqAMZqd7bBsoNKcCegYDcdLsDz9L1BptQ4RRA+ucF3BsaBQu0rgke5Yotp5haorEroQ3RWSqvYGFZeUOY3SU83XlBCbCoBaXsw2CSoeXpYeoOJceEPqsERuHCwT1PLCfCK1YsbBmoaSiVj5ZiJkJZJpYzoJVV/9LHBVlF0nH8MpqOXB+9Q9xQ5TUzgBtfe7wofiYo+B2vyfqXuKso01lMwF4JtXjaOJfhJE/mm5f4Lampho48OJbFMmNyGQQyq2VlDxzcDUOEmXvLj/U5mskYtP3Mbt6DjUbfqxi8QpWfa+b0eRc8huYChpmLvVVrUy6Td2rLZj62oMyrTGhe6uLdHrKodBbUxrXHzpHzpHOCgiRiyDDrU3mnG6HnEhE4gJGRPTragGBZkIKgqdKkfuSVRoO44KVR8gS5YSfQbjG9Jj5gf1uVGg5BX2f+nI1iUPyHXFrsojqEAl0Dmg0VmjSk9Iw8CSKSiLJ5uKUqdCGgZ1WQ2g4ouFZaZMp9qvcFSry2C/GUBZPkBCGfWWCmkY2MCG9qGWlt845hJtkIZhMIE9qPhivU51l0hWuLHi/QnsQZUIOyOOKlV8xRmGsByDqinmgWbaNl8fUH4Mp/UIVIVbDWKrOmr1CmWuWKVD7QjS+WCZSlVgMmvNz+80qAqd6wm1yHKPMqJhpUKlWM+j/bYflQrnx7ycxycUfqBaqovqi6L8mNdQPaDStVPkGZ2UsYozxJ+k63QAlTtmD1cnxRlFmasw70NJ5xB9RZQZTBHBIGWyB3V2WOYPcaK4yDuEMRbnN5TMPORXOFdm8MveMPBMvqCWY2dRw3er52cjEkJxRvfi/SJszVK6fEEZneDosICoVPbB8/uVowBh3R3jFkoSw+zxg+NRZwDNLXEiH1BGax6NxdbWVCD73Fn1FsroLXqBCtJvwMLvnFkCefb8QAU3gKPVPX8EssV4gjoC5q/bakhrT0zv/EWoLqVDIO+NKvenDwoVHjsoc7DNvx2KDCyh+KmFigH2YyRERwjmioi4gSoAUGOpH3ttQWGOKBqoEmJpqciLtJPizdWpquFMy/cLJWx/bmaFBEeYNxbxdSuuROpbuh6KDBMo8ft1YIwTHQMCd1toKzV9sA3pUKECFb1eAf5MYz5JfbDyekIVSh3nSIGyTg7RQ01SuyD0F6AapJ2dg///oUi0I4VdhPYLUKwg5/lBncliflALAk5S/x5U8gf1B/UH9Qf1B4WBmuU2M8sNeZaui6WTp0bwWoDpxcmzdIebWGMg7WzBiztsGThw5ShNy454CRwsM8NcObNK1WjOGaoNsaDB6EP0e5jEl5kSiztDtcEoLGx/Q1ElW67W6zhDdWE7JMHRU6hWbmRDKneoApgK6kOp1X1x9q4HpTQSzlAxLGnWFxUKVCDLS8jCKAqZoKftl3SDuifNYAm2t/RypyAuFnlV5cl+qZUEW0M90ovmROxAUaVBTcga6pGItTwVVY2CX6hnytr2YI3ZJLBtoZ7JfeuimZGSSm9Qz2MQ6+N/foVnsG2hXgdGxqM17ZOfq7Ydod5Ha/BKvBcVOK9uCfU+hAQc1yqiKyiVHVT/uBZxsA3ofkFA9Q+2MSUA7AfQKmQL1S8BQBVLcHEbaXGUyk5jBTUslsCVlUT8muz6XHGx+Vk5eAnDshJsAQ4XQvzkSdko2dyIEIyrJw4WUGoBDr5UifLGb2nFou7nHZw8tVTJqahrIAcorajLrarLC5Re/oYvFPQFNVYoiC2p9AY1VlKJLD71BjVefIoq0/UHNV6miylo9gf1qaDZuvTbJ9Sn0m98l4k71Ociebt2Ap9QU+0E+JaqHlRhDzXZeIFwjDWFC3uo6RYVcDPPZz2cRxsoUzMPsO1pSsOgAgBlbHvysKzowM2rjWYG0CAGaaUz/kqexvKu2FwJBGmlAzQdGsVIVt31Y9y6YE2H5vZMsyhfRZ2MCxTanmlsZPUoeCOrseXXmyxafgHN0X5k1xwNaCP3wWTXRg4tinZjsm64n+XVBME8L3GY53UX87wYZJ5XqASzvGwmmOe1PMEsLzAK5nnVUzDLS7FazfD6sFYzvGitw5rflXStZnh5X4c1v2sO71yzuxDyyTW3qzOfmtsloy/9n+tY/wG5qnKyNMAIDQAAAABJRU5ErkJggg=="
-                                                        className="pay-logo" alt="PhonePe" />
-                                                    <span className="unaviablee m-0 "><b>PhonePe</b></span>
-                                                </label>
-                                            </div>
-                                        )}
-                                        {products.Paytm !== false && (
-                                            <div
-                                                className={`form-check available-method ${activeTab === 4 ? "active" : ""}`}
-                                                onClick={() => handleTabClick(4)}
-                                            >
-                                                <label className="form-check-label">
-                                                    <img src="https://upload.wikimedia.org/wikipedia/commons/2/24/Paytm_Logo_%28standalone%29.svg" className="pay-logo" alt="Paytm" />
-                                                    <span className="unaviablee m-0"><b>Paytm</b></span>
-                                                </label>
-                                            </div>
-                                        )}
-                                        {products.Bhim !== false && (
-                                            <div
-                                                className={`form-check available-method ${activeTab === 1 ? "active" : ""}`}
-                                                onClick={() => handleTabClick(1)}
-                                            >
-                                                <label className="form-check-label">
-                                                    <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTnMDjlc4aJzqc4vfL9BFw9hxrZk0nRyBAHwc95tUX_rlJMvwdHwHUU4FwuqQ&s" className="pay-logo" alt="BHIM UPI" />
-                                                    <span className="unaviablee">BHIM UPI</span>
-                                                </label>
-                                            </div>
-                                        )}
-                                    </div>
-                                </li>
-                            </ul>
-                        </div>
-
-                        {/* Price Summary */}
-                        <div className="cart__footer">
-                            <div className="cart__price__details">
-                                <div className="cart__breakup__inner">
-                                    <div className="shipping__total">
-                                        <span>Shipping:</span>
-                                        <span>FREE</span>
-                                    </div>
-                                    <div className="cart__total">
-                                        <span>Total Product Price:</span>
-                                        <span className="cartTotalAmount">₹{totalMrp}.00</span>
-                                    </div>
-                                    <div className="sc-bBXxYQ" style={{ marginTop: '12px', marginBottom: '4px' }} />
-                                    <div className="mc_pay__total">
-                                        <span>Order Total:</span>
-                                        <span className="cartTotalAmount">₹{totalMrp}.00</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        {/* Bottom CTA */}
-                        <div className="ixHOyU">
-                            <div className="eGwEyP">
-                                <div className="dUijPM">
-                                    <span className="cartTotalAmount">₹{totalMrp}.00</span>
-                                    <button className="ylmAj">VIEW PRICE DETAILS</button>
-                                </div>
-                                <div className="iAFVK">
-                                    <a
-                                        href={payment || '#'}
-                                        className="bwHzRF"
-                                    >
-                                        Order Now
-                                    </a>
-                                </div>
-                            </div>
+                        <div className="pmt-secure">
+                            <img src="/assets/images/lock-icon.svg" alt="Secure" width={16} height={16}
+                                onError={e => { e.target.style.display="none"; }}
+                            />
+                            <p className="pmt-secure-txt">100% Secure</p>
                         </div>
                     </div>
                 </div>
-            </div>
+
+                {/* ══ BODY ══ */}
+                <div className="pmt-body">
+
+                    {/* ── UPI SECTION ── */}
+                    <div className="upi-section">
+                        <div className="upi-sec-hdr">
+                            <div className="upi-sec-hdr-left">
+                                <img src="/assets/images/upi.svg" alt="UPI" width={30}
+                                    onError={e => { e.target.style.display="none"; }}
+                                />
+                                <p className="upi-sec-label">UPI</p>
+                            </div>
+                            <img src="/assets/images/up_arw.svg" alt="Arrow" width={18}
+                                onError={e => { e.target.outerHTML='<span style="font-size:18px;color:#555">∧</span>'; }}
+                            />
+                        </div>
+
+                        <div className="upi-opts-card">
+
+                            {/* PhonePe */}
+                            {show.phonepe && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(3)}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===3} onChange={() => setActiveTab(3)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>PhonePe</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-phonepe">30% Extra Discount By PhonePe</p>
+                                        </div>
+                                    </div>
+                                    <img src="/assets/images/phonepe.svg" alt="PhonePe" width={30}
+                                        onError={e=>{e.target.outerHTML='<svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="15" fill="#5f259f"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">₱</text></svg>';}}
+                                    />
+                                </div>
+                            )}
+
+                            {/* PhonePe 2 */}
+                            {show.phonepe2 && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(7)} style={{ borderTop: "1px solid #e5e7eb" }}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===7} onChange={() => setActiveTab(7)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>{products.Phonepe2Name || "PhonePe"}</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-phonepe">30% Extra Discount By PhonePe</p>
+                                        </div>
+                                    </div>
+                                    <img src="/assets/images/phonepe.svg" alt="PhonePe" width={30}
+                                        onError={e=>{e.target.outerHTML='<svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="15" fill="#5f259f"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold">₱</text></svg>';}}
+                                    />
+                                </div>
+                            )}
+
+                            {/* GPay */}
+                            {show.gpay && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(2)}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===2} onChange={() => setActiveTab(2)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>GPay</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-gpay">20% Extra Discount By Gpay</p>
+                                        </div>
+                                    </div>
+                                    <img src="/assets/images/gpay_icon.svg" alt="GPay" width={30}
+                                        onError={e=>{e.target.outerHTML='<svg width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="15" fill="#fff" stroke="#e0e0e0"/><text x="50%" y="57%" dominant-baseline="middle" text-anchor="middle" font-size="14" font-weight="800" fill="#4285F4">G</text></svg>';}}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Paytm */}
+                            {show.paytm && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(4)}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===4} onChange={() => setActiveTab(4)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>PayTM</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-paytm">10% Extra Discount By Paytm</p>
+                                        </div>
+                                    </div>
+                                    <img src="/assets/images/paytm_icon.svg" alt="Paytm" width={30}
+                                        onError={e=>{e.target.outerHTML='<svg xmlns="http://www.w3.org/2000/svg" width="50px" height="50px" enable-background="new -164 191.6 512 193" viewBox="-164 191.6 512 193" id="paytm"><path fill="#02b9ef" d="M229.8,243.2c2-1.6,3-2.4,4-3.2c13.9-11.8,31.7-10.5,43.6,3.5c1.2,1.4,1.8,1.5,3,0.3c0.8-0.9,1.7-1.6,2.5-2.5   c9.3-9.1,21.6-11.8,33.1-6.7c12.1,5.4,18.6,14.9,18.7,28.2c0.2,28.7,0.1,57.3,0.1,86c0,10.2-6.3,16.6-16.4,16.6c-4,0-8-0.3-12,0.1   c-4.1,0.4-5.3-0.9-5.3-5.2c0.2-28,0.1-56,0.1-84c0-1.2,0-2.3,0-3.5c-0.1-6.5-2.7-9.2-8.9-9.5c-5.6-0.3-9.5,3.1-10.1,8.8   c-0.1,1.3,0,2.7,0,4c0,24.2,0,48.3,0,72.5c0,10.6-6.1,16.8-16.7,16.7c-5.4-0.1-12.7,2.4-15.8-1.1c-2.7-3-0.9-10.1-0.9-15.4   c0-24.8,0-49.7,0-74.5c0-8.8-5.7-13.3-13.1-10.3c-4.6,1.9-6.1,5.6-6.1,10.4c0.1,23.2,0,46.3,0,69.5c0,1.8,0,3.7,0,5.5   c-0.3,9.7-6.5,15.8-16.1,15.9c-4,0.1-8-0.3-12,0.1c-4.3,0.4-5.6-0.8-5.5-5.4c0.2-39.3,0.1-78.6,0.1-118c0-1.7,0.1-3.3,0-5   c-0.2-2.2,0.7-2.9,2.9-2.9c9.2,0.1,18.3,0.1,27.5,0c2.3,0,3.4,0.6,3.2,3.1C229.5,239,229.7,240.6,229.8,243.2z"></path><path fill="#06306f" d="M17.8 297.4c0 13.7 0 27.3 0 41-.1 17.8-9.4 27-27.2 27.1-7.8 0-15.7.1-23.5 0-15.8-.2-27.4-10.7-28.2-26.5-.6-11.3-.7-22.7-.1-34 .8-16.2 13.2-27.6 29.6-27.8 4.3-.1 8.7 0 13 0 4.2-.1 5.8-2.5 5.7-6.5 0-4-1.8-5.8-5.8-5.6-4.5.1-9 .1-13.5 0-11-.2-17.1-6.2-17-17 0-4.4-2-10.3.9-12.9 2.5-2.2 8.2-.8 12.5-.8 11.2-.1 22.3 0 33.5 0 11.9 0 20 8.1 20.1 20.1C17.9 268.7 17.8 283.1 17.8 297.4zM-12.8 320.1c0-1.7 0-3.3 0-5 0-10.2 0-10.2-10.2-9.8-5.1.2-7.9 2.8-8 8.1-.1 4.2-.1 8.3 0 12.5.1 7.2 3.3 9.1 13.7 9.4 7.7.2 3.8-5.2 4.5-8.2C-12.4 324.9-12.9 322.4-12.8 320.1zM106.8 286.5c0 15.3.2 30.7-.1 46-.2 11.8-3 22.5-14.4 28.8-4.6 2.5-9.6 3.9-14.8 4-11.5.2-23 0-34.5.2-2.8 0-3.4-1-3.3-3.5.2-4.2-.1-8.3.1-12.5.2-8 6.3-14.1 14.3-14.4 5.2-.2 10.3-.1 15.5 0 4.2 0 6.5-1.7 6.5-6.2 0-4.6-2.2-6.2-6.4-6.3-7-.2-14 .8-20.9-1.2-11.9-3.5-20.6-13.4-20.9-25.7-.6-19.5-.2-39-.3-58.5 0-2.2.7-2.9 2.9-2.8 8.2.1 16.3.2 24.5 0 3.6-.1 3.1 1.9 3.1 4.1 0 14.7 0 29.3 0 44 0 6.4 3 9.8 8.6 10 6.6.2 9.5-2.5 9.5-9.2 0-14.8.1-29.7-.1-44.5 0-3.5.9-4.5 4.4-4.4 7.3.3 14.7.4 22 0 4-.2 4.6 1.3 4.5 4.8C106.7 254.9 106.8 270.7 106.8 286.5zM-148 309.2c0-16.3 0-32.7 0-49 0-16 9.8-26 25.9-25.8 10.5.1 21-1.2 31.4.8 13.3 2.6 21.7 12.9 21.8 26.6.1 14.5 0 29 0 43.5 0 18.2-10.7 29.3-28.9 29.8-5.5.2-11 .1-16.5 0-2.5-.1-3.6.7-3.5 3.4.2 4 .1 8 0 12-.2 8.6-6.3 14.8-14.8 14.9-5 .1-11.3 2.1-14.5-.8-3-2.7-.8-9.1-.9-13.9C-148.1 336.9-148 323-148 309.2zM-117.8 284.7c0 3.2 0 6.3 0 9.5 0 11.3 0 11.3 11.3 10.3 4.9-.4 7.2-2.8 7.3-7.7.1-5.6-.2-11.3.1-16.9.6-16.2-2.4-14.6-15.6-14.7-2.4 0-3.2.7-3.2 3.1C-117.7 273.7-117.8 279.2-117.8 284.7z"></path><path fill="#02b9ef" d="M135.1,309.4c0-13.3-0.1-26.7,0.1-40c0-3.1-0.7-4.4-4.1-4.3c-4.5,0.2-10.5,1.5-13-0.7   c-3.1-2.9-0.7-9.1-1.1-13.9c0-0.3,0-0.7,0-1c0-4.7-1.5-10.2,0.5-13.7s8.1-1.3,12.4-2.4c8.5-2.2,14.9-7.1,20.1-13.9   c3.6-4.6,8.1-7.9,13.9-9c3.1-0.6,5-0.2,4.8,3.8c-0.3,5.6,0,11.3-0.1,17c-0.1,2.4,0.8,3.2,3.2,3.1c4-0.1,8,0.1,12-0.1   c2.4-0.1,3.2,0.8,3.1,3.2c-0.1,8.2-0.1,16.3,0,24.5c0,2.3-0.6,3.5-3.1,3.2c-0.5-0.1-1,0-1.5,0c-4.4,0.4-10.5-2-12.8,1   c-2.2,2.8-0.8,8.6-0.8,13.1c0,27.2-0.1,54.3,0.1,81.5c0,3.8-1,5-4.8,4.7c-3.6-0.3-7.3,0-11-0.1c-10.8-0.4-17.9-7.7-17.9-18.5   C135.1,334.4,135.1,321.9,135.1,309.4z"></path></svg>';}}
+                                    />
+                                </div>
+                            )}
+
+                            {/* BHIM */}
+                            {show.bhim && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(1)}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===1} onChange={() => setActiveTab(1)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>BHIM UPI</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-bhim">Direct Bank Transfer</p>
+                                        </div>
+                                    </div>
+                                    <img src="https://upload.wikimedia.org/wikipedia/en/b/b3/Bhim_logo.png" alt="BHIM" width={30}
+                                        style={{objectFit:"contain"}}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Cashfree */}
+                            {show.cashfree && (
+                                <div className="pmt-opt" onClick={() => setActiveTab(6)}>
+                                    <div className="pmt-opt-left">
+                                        <input type="radio" name="upi" className="pmt-radio"
+                                            checked={activeTab===6} onChange={() => setActiveTab(6)} />
+                                        <div className="pmt-opt-info">
+                                            <div className="pmt-opt-top">
+                                                <span>₹{totalMrp}</span>
+                                                <span className="pmt-pipe">|</span>
+                                                <span>Card / Net Banking</span>
+                                            </div>
+                                            <p className="pmt-opt-sub sub-cashfree">Secured by Cashfree</p>
+                                        </div>
+                                    </div>
+                                    <svg width="52" height="22" viewBox="0 0 120 40">
+                                        <rect width="120" height="40" rx="4" fill="#1d3557"/>
+                                        <text x="50%" y="55%" dominantBaseline="middle" textAnchor="middle"
+                                            fill="#fff" fontSize="13" fontWeight="700" fontFamily="Inter,sans-serif">
+                                            CASHFREE
+                                        </text>
+                                    </svg>
+                                </div>
+                            )}
+
+                        </div>{/* upi-opts-card */}
+                    </div>{/* upi-section */}
+
+                    {/* ── CASHBACK BANNER ── */}
+                    <div className="cashback-banner">
+                        <div className="cb-title">Cashback on First Order!</div>
+                        <div className="cb-body">
+                            Place your order and get <span className="cb-bold">₹{cashback}</span> cashback!
+                            Cashback will be credited to your original UPI payment method after delivery.
+                        </div>
+                    </div>
+
+                    {/* ── PRICE SUMMARY ── */}
+                    <div className="price-box">
+                        <div className="price-row">
+                            <span>Price ({itemCount} item{itemCount!==1?"s":""})</span>
+                            <span>₹ {totalMrp}</span>
+                        </div>
+                        <div className="price-row">
+                            <span>Delivery Charges</span>
+                            <span className="price-free">FREE</span>
+                        </div>
+                        <div className="price-row">
+                            <span>Discount fee</span>
+                            <span className="price-strike">₹ {crossedMrp}</span>
+                        </div>
+                        <div className="price-total-row">
+                            <div className="price-total-lbl">
+                                Total Amount
+                                <img src="/assets/images/uparrow.svg" alt="^" width={10} height={10}
+                                    style={{marginTop:2}}
+                                    onError={e=>{e.target.outerHTML='<svg width="10" height="10" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="#2855E9" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';}}
+                                />
+                            </div>
+                            <span className="price-total-amt">₹ {totalMrp}</span>
+                        </div>
+                    </div>
+
+                    {/* ── SECURE PAY BANNER ── */}
+                    <div className="secure-pay-wrap">
+                        <img
+                            src="/assets/images/SecurePay.svg"
+                            alt="Secure Pay"
+                            className="secure-pay-img"
+                            onError={e=>{e.target.style.display="none";}}
+                        />
+                    </div>
+
+                </div>{/* pmt-body */}
+
+                {/* ══ STICKY FOOTER ══ */}
+                <div className="pmt-footer">
+                    <div className="pmt-footer-amt">₹{totalMrp}</div>
+                    <button
+                        className="pmt-pay-btn"
+                        onClick={handlePay}
+                        disabled={loading}
+                    >
+                        {loading
+                            ? <><span className="btn-spin"/>&nbsp;PROCESSING…</>
+                            : "PROCEED TO PAY"
+                        }
+                    </button>
+                </div>
+
+            </div>{/* pmt-page */}
         </>
     );
-};
-
-export default Payments;
+}

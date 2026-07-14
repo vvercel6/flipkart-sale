@@ -1,33 +1,7 @@
 "use client";
-import { useFormik } from "formik";
-import * as Yup from "yup";
 import Link from "next/link";
-import { useRouter } from "next/navigation"; // ✅ App Router
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-
-// ── Validation Schema ──────────────────────────────────────────────────────────
-const AddressSchema = Yup.object({
-  fname: Yup.string()
-    .min(2, "Name must be at least 2 characters")
-    .matches(/^[a-zA-Z\s]+$/, "Name can only contain letters")
-    .required("Full name is required"),
-  mobile: Yup.string()
-    .matches(/^[6-9]\d{9}$/, "Enter a valid 10-digit Indian mobile number")
-    .required("Mobile number is required"),
-  pincode: Yup.string()
-    .matches(/^\d{6}$/, "Pincode must be exactly 6 digits")
-    .required("Pincode is required"),
-  city: Yup.string()
-    .min(2, "City must be at least 2 characters")
-    .required("City is required"),
-  state: Yup.string().required("Please select a state"),
-  house: Yup.string()
-    .min(3, "Please enter a valid house/flat number")
-    .required("House/flat details are required"),
-  colonny: Yup.string()
-    .min(3, "Please enter your area or colony")
-    .required("Area / Colony is required"),
-});
 
 // ── State Code Map ─────────────────────────────────────────────────────────────
 const STATE_MAP = {
@@ -51,46 +25,59 @@ const Address = () => {
   const router = useRouter();
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [errors, setErrors] = useState({});
 
-  const {
-    values,
-    errors,
-    touched,
-    handleChange,
-    handleBlur,
-    handleSubmit,
-    setFieldValue,
-    setFieldTouched,
-    isSubmitting,
-  } = useFormik({
-    initialValues: {
-      fname: "",
-      mobile: "",
-      pincode: "",
-      city: "",
-      state: "",
-      house: "",
-      colonny: "",
-    },
-    validationSchema: AddressSchema,
-    onSubmit: (vals, { setSubmitting }) => {
-      try {
-        localStorage.setItem(
-          "user",
-          JSON.stringify({
-            address: vals.house,
-            name: vals.fname,
-            phone: Number(vals.mobile),
-          })
-        );
-        router.push("/payment");
-      } catch (err) {
-        console.error("Failed to save address:", err);
-      } finally {
-        setSubmitting(false);
-      }
-    },
+  const [values, setValues] = useState({
+    fname: "",
+    mobile: "",
+    pincode: "",
+    city: "",
+    state: "",
+    house: "",
+    colonny: "",
   });
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setValues((prev) => ({ ...prev, [name]: value }));
+    // Clear error for the field as user types
+    if (value.trim()) setErrors((prev) => ({ ...prev, [name]: "" }));
+  };
+
+  const validate = () => {
+    const newErrors = {};
+    if (!values.fname.trim())    newErrors.fname   = "Full name is required";
+    if (!values.mobile.trim())   newErrors.mobile  = "Mobile number is required";
+    if (!values.pincode.trim())  newErrors.pincode = "Pincode is required";
+    if (!values.city.trim())     newErrors.city    = "City is required";
+    if (!values.state)           newErrors.state   = "Please select a state";
+    return newErrors;
+  };
+
+  const handleSubmit = () => {
+    const newErrors = validate();
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      localStorage.setItem(
+        "user",
+        JSON.stringify({
+          address: values.house,
+          name: values.fname,
+          phone: Number(values.mobile),
+        })
+      );
+      router.push("/payment");
+    } catch (err) {
+      console.error("Failed to save address:", err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   // ── Geolocation ──────────────────────────────────────────────────────────────
   const handleUseCurrentLocation = () => {
@@ -122,12 +109,12 @@ const Address = () => {
               : addr.road || "",
           };
 
-          Object.entries(fieldsToSet).forEach(([key, val]) => {
-            if (val) {
-              setFieldValue(key, val);
-              setFieldTouched(key, false); // clear errors after autofill
-            }
-          });
+          setValues((prev) => ({
+            ...prev,
+            ...Object.fromEntries(
+              Object.entries(fieldsToSet).filter(([, v]) => v)
+            ),
+          }));
         } catch {
           setLocationError("Could not fetch address. Please fill manually.");
         } finally {
@@ -142,18 +129,6 @@ const Address = () => {
       { timeout: 10000, maximumAge: 0 }
     );
   };
-
-  // ── Helper: field error display ──────────────────────────────────────────────
-  const fieldError = (name) =>
-    touched[name] && errors[name] ? (
-      <div className="field-error">{errors[name]}</div>
-    ) : null;
-
-  const fieldClass = (name) =>
-    `form-control${touched[name] && errors[name] ? " is-invalid" : touched[name] && !errors[name] ? " is-valid" : ""}`;
-
-  const selectClass = (name) =>
-    `form-select${touched[name] && errors[name] ? " is-invalid" : touched[name] && !errors[name] ? " is-valid" : ""}`;
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -247,21 +222,6 @@ const Address = () => {
           box-shadow: 0 0 0 0.15rem rgba(159,32,137,0.15);
           outline: none;
         }
-        .form-floating > .form-control.is-invalid,
-        .form-floating > .form-select.is-invalid {
-          border-color: #d32f2f;
-          box-shadow: none;
-        }
-        .form-floating > .form-control.is-valid,
-        .form-floating > .form-select.is-valid {
-          border-color: #2e7d32;
-          box-shadow: none;
-        }
-
-        .field-error {
-          font-size: 11px; color: #d32f2f;
-          margin-top: 3px; padding-left: 2px;
-        }
 
         /* Row (city + state) */
         .two-col { display: flex; gap: 10px; margin-bottom: 10px; }
@@ -283,6 +243,17 @@ const Address = () => {
         }
         .save-btn:hover:not(:disabled) { background: #ffc200; }
         .save-btn:disabled { opacity: 0.65; cursor: not-allowed; }
+
+        /* Validation */
+        .form-floating > .form-control.is-invalid,
+        .form-floating > .form-select.is-invalid {
+          border-color: #d32f2f;
+          box-shadow: none;
+        }
+        .field-error {
+          font-size: 11px; color: #d32f2f;
+          margin-top: 3px; padding-left: 2px;
+        }
       `}</style>
 
       <div className="addr-page">
@@ -354,23 +325,22 @@ const Address = () => {
           {/* Full Name */}
           <div className="form-floating">
             <input
-              className={fieldClass("fname")}
+              className={`form-control${errors.fname ? " is-invalid" : ""}`}
               type="text"
               id="fname"
               name="fname"
               placeholder="Full Name"
               value={values.fname}
               onChange={handleChange}
-              onBlur={handleBlur}
             />
             <label htmlFor="fname">Full Name *</label>
-            {fieldError("fname")}
+            {errors.fname && <div className="field-error">{errors.fname}</div>}
           </div>
 
           {/* Mobile */}
           <div className="form-floating">
             <input
-              className={fieldClass("mobile")}
+              className={`form-control${errors.mobile ? " is-invalid" : ""}`}
               type="tel"
               id="mobile"
               name="mobile"
@@ -378,16 +348,15 @@ const Address = () => {
               maxLength={10}
               value={values.mobile}
               onChange={handleChange}
-              onBlur={handleBlur}
             />
             <label htmlFor="mobile">Mobile Number *</label>
-            {fieldError("mobile")}
+            {errors.mobile && <div className="field-error">{errors.mobile}</div>}
           </div>
 
           {/* Pincode */}
           <div className="form-floating">
             <input
-              className={fieldClass("pincode")}
+              className={`form-control${errors.pincode ? " is-invalid" : ""}`}
               type="text"
               id="pincode"
               name="pincode"
@@ -395,36 +364,33 @@ const Address = () => {
               maxLength={6}
               value={values.pincode}
               onChange={handleChange}
-              onBlur={handleBlur}
             />
             <label htmlFor="pincode">Pincode *</label>
-            {fieldError("pincode")}
+            {errors.pincode && <div className="field-error">{errors.pincode}</div>}
           </div>
 
           {/* City + State */}
           <div className="two-col">
             <div className="form-floating">
               <input
-                className={fieldClass("city")}
+                className={`form-control${errors.city ? " is-invalid" : ""}`}
                 type="text"
                 id="city"
                 name="city"
                 placeholder="City"
                 value={values.city}
                 onChange={handleChange}
-                onBlur={handleBlur}
               />
               <label htmlFor="city">City *</label>
-              {fieldError("city")}
+              {errors.city && <div className="field-error">{errors.city}</div>}
             </div>
             <div className="form-floating">
               <select
-                className={selectClass("state")}
+                className={`form-select${errors.state ? " is-invalid" : ""}`}
                 id="state"
                 name="state"
                 value={values.state}
                 onChange={handleChange}
-                onBlur={handleBlur}
               >
                 <option value="">Select State</option>
                 {[
@@ -444,40 +410,36 @@ const Address = () => {
                 ))}
               </select>
               <label htmlFor="state">State *</label>
-              {fieldError("state")}
+              {errors.state && <div className="field-error">{errors.state}</div>}
             </div>
           </div>
 
           {/* House */}
           <div className="form-floating">
             <input
-              className={fieldClass("house")}
+              className="form-control"
               type="text"
               id="house"
               name="house"
               placeholder="Flat, House no, Building"
               value={values.house}
               onChange={handleChange}
-              onBlur={handleBlur}
             />
-            <label htmlFor="house">House No., Building Name *</label>
-            {fieldError("house")}
+            <label htmlFor="house">House No., Building Name</label>
           </div>
 
           {/* Colony */}
           <div className="form-floating">
             <input
-              className={fieldClass("colonny")}
+              className="form-control"
               type="text"
               id="colonny"
               name="colonny"
               placeholder="Area, Colony, Street"
               value={values.colonny}
               onChange={handleChange}
-              onBlur={handleBlur}
             />
-            <label htmlFor="colonny">Road Name, Area, Colony *</label>
-            {fieldError("colonny")}
+            <label htmlFor="colonny">Road Name, Area, Colony</label>
           </div>
         </div>
 
@@ -487,9 +449,9 @@ const Address = () => {
             type="button"
             className="save-btn"
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={submitting}
           >
-            {isSubmitting ? "Saving…" : "Save Address and Continue"}
+            {submitting ? "Saving…" : "Save Address and Continue"}
           </button>
         </div>
       </div>

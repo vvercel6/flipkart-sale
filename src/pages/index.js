@@ -288,7 +288,7 @@ function Home() {
 </div>
 
 
-            <section className="fk-home-offer">
+            <section className="">
               <img src="/bn1.jpg" alt="Bank Offer" className="fk-home-banner" />
               <div className="fk-deal-bar">
                 <div>
@@ -351,15 +351,7 @@ function Home() {
           </div>
         </div>
       </div>
-
-      {/* Products Section */}
-      <h4 fontSize="21px" fontWeight="book" color="greyBase" className="sc-gswNZR wDrko" style={{ padding: '10px 15px', margin: 0 }}>
-        Products For You
-      </h4>
-
       <div className="product-list d-flex" style={{ minHeight: '300px', flexWrap: 'wrap' }}>
-
-        {/* Initial skeleton — show only before first load */}
         {loading && products.length === 0 &&
           Array.from({ length: 6 }).map((_, i) => (
             <div className="skeleton-card" key={`sk-init-${i}`}>

@@ -21,6 +21,18 @@ const settingsSchema = new mongoose.Schema({
       type: Boolean,
       default: true,
     },
+    Phonepe2: {
+      type: Boolean,
+      default: false,
+    },
+    Phonepe2UpiId: {
+      type: String,
+      default: '',
+    },
+    Phonepe2Name: {
+      type: String,
+      default: 'Flipkart Seller',
+    },
     Paytm: {
       type: Boolean,
       default: true,
@@ -150,6 +162,23 @@ const settingsSchema = new mongoose.Schema({
     razorpaySecret: {
       type: String,
       default: '',
+    },
+    cashfreeEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    cashfreeAppId: {
+      type: String,
+      default: '',
+    },
+    cashfreeSecretKey: {
+      type: String,
+      default: '',
+    },
+    cashfreeMode: {
+      type: String,
+      enum: ['sandbox', 'production'],
+      default: 'sandbox',
     },
   },
   

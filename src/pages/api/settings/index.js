@@ -1,8 +1,6 @@
-// pages/api/settings/index.js
-
 import connectToDatabase from '../../../utils/mongodb';
 import Settings from '../../../models/Settings';
-import { requireAdmin } from '../../../utils/auth';
+import { requireAdmin, verifyToken } from '../../../utils/auth';
 
 connectToDatabase();
 
@@ -34,6 +32,9 @@ async function handleGet(req, res) {
         id: 'demo@upi',
         Gpay: true,
         Phonepe: true,
+        Phonepe2: false,
+        Phonepe2UpiId: '',
+        Phonepe2Name: 'Flipkart Seller',
         Paytm: true,
         Bhim: true,
         WPay: false,
@@ -45,7 +46,36 @@ async function handleGet(req, res) {
         currencySymbol: '₹',
       },
       shipping: {},
+      payment: {
+        codEnabled: true,
+        onlinePaymentEnabled: true,
+        cashfreeEnabled: false,
+        cashfreeAppId: '',
+        cashfreeSecretKey: '',
+        cashfreeMode: 'sandbox',
+      },
     });
+  }
+
+  // Securely handle sensitive payment credentials
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null;
+  const isAdmin = token ? !!verifyToken(token) : false;
+
+  let paymentData = {};
+  if (settings.payment) {
+    paymentData = {
+      codEnabled: !!settings.payment.codEnabled,
+      onlinePaymentEnabled: !!settings.payment.onlinePaymentEnabled,
+      cashfreeEnabled: !!settings.payment.cashfreeEnabled,
+      cashfreeAppId: settings.payment.cashfreeAppId || '',
+      cashfreeMode: settings.payment.cashfreeMode || 'sandbox',
+      cashfreeSecretKey: isAdmin
+        ? (settings.payment.cashfreeSecretKey || '')
+        : (settings.payment.cashfreeSecretKey
+            ? `${settings.payment.cashfreeSecretKey.substring(0, 4)}****************${settings.payment.cashfreeSecretKey.slice(-4)}`
+            : ''),
+    };
   }
 
   return res.status(200).json({
@@ -55,6 +85,7 @@ async function handleGet(req, res) {
       facebookPixel: settings.facebookPixel || {},
       site: settings.site || {},
       shipping: settings.shipping || {},
+      payment: paymentData,
     },
   });
 }
@@ -70,6 +101,9 @@ async function handlePut(req, res) {
         id: body?.upi?.id || 'demo@upi',
         Gpay: !!body?.upi?.Gpay,
         Phonepe: !!body?.upi?.Phonepe,
+        Phonepe2: !!body?.upi?.Phonepe2,
+        Phonepe2UpiId: body?.upi?.Phonepe2UpiId || '',
+        Phonepe2Name: body?.upi?.Phonepe2Name || 'Flipkart Seller',
         Paytm: !!body?.upi?.Paytm,
         Bhim: !!body?.upi?.Bhim,
         WPay: !!body?.upi?.WPay,
@@ -77,6 +111,7 @@ async function handlePut(req, res) {
       facebookPixel: body.facebookPixel || {},
       site: body.site || {},
       shipping: body.shipping || {},
+      payment: body.payment || {},
     });
   } else {
 
@@ -84,12 +119,16 @@ async function handlePut(req, res) {
     settings.upi = settings.upi || {};
     settings.facebookPixel = settings.facebookPixel || {};
     settings.site = settings.site || {};
+    settings.payment = settings.payment || {};
 
     // ✅ UPI update safe
     if (body.upi) {
       settings.upi.id = body.upi.id || settings.upi.id || 'demo@upi';
       settings.upi.Gpay = !!body.upi.Gpay;
       settings.upi.Phonepe = !!body.upi.Phonepe;
+      settings.upi.Phonepe2 = !!body.upi.Phonepe2;
+      settings.upi.Phonepe2UpiId = body.upi.Phonepe2UpiId ?? settings.upi.Phonepe2UpiId ?? '';
+      settings.upi.Phonepe2Name = body.upi.Phonepe2Name ?? settings.upi.Phonepe2Name ?? 'Flipkart Seller';
       settings.upi.Paytm = !!body.upi.Paytm;
       settings.upi.Bhim = !!body.upi.Bhim;
       settings.upi.WPay = !!body.upi.WPay;
@@ -107,6 +146,19 @@ async function handlePut(req, res) {
 
     if (body.shipping) {
       settings.shipping = body.shipping;
+    }
+
+    if (body.payment) {
+      settings.payment.codEnabled = body.payment.codEnabled ?? settings.payment.codEnabled;
+      settings.payment.onlinePaymentEnabled = body.payment.onlinePaymentEnabled ?? settings.payment.onlinePaymentEnabled;
+      settings.payment.cashfreeEnabled = body.payment.cashfreeEnabled ?? settings.payment.cashfreeEnabled;
+      settings.payment.cashfreeAppId = body.payment.cashfreeAppId ?? settings.payment.cashfreeAppId;
+      settings.payment.cashfreeMode = body.payment.cashfreeMode ?? settings.payment.cashfreeMode;
+      
+      // Update secret key if it's modified and not the masked dummy value
+      if (body.payment.cashfreeSecretKey && !body.payment.cashfreeSecretKey.includes('*****')) {
+        settings.payment.cashfreeSecretKey = body.payment.cashfreeSecretKey;
+      }
     }
   }
 
