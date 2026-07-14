@@ -188,6 +188,7 @@ const SimilarProducts = ({ currentProductId, category, limit = 6 }) => {
           position: relative;
           aspect-ratio: 1;
           border-radius: 6px;
+          width: 100%;
           overflow: hidden;
           background: #f8f8f8;
           border: 1px solid #efefef;
