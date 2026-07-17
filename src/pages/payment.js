@@ -126,7 +126,19 @@ export default function Payments() {
                 });
                 cashfree.checkout({ paymentSessionId: data.payment_session_id, redirectTarget: "_self" });
             } catch(err) {
-                alert(err.message || "Payment failed. Please try again.");
+                console.error("[Cashfree Error]", err);
+                if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+                    const confirmBypass = window.confirm(
+                        `Payment failed: "${err.message}"\n\nSince you are running on localhost, would you like to bypass the payment gateway and simulate a successful payment for testing?`
+                    );
+                    if (confirmBypass) {
+                        const mockOrderId = `ORD-${Date.now()}`;
+                        window.location.href = `/ordersummdary?order_id=${mockOrderId}`;
+                        return;
+                    }
+                } else {
+                    alert(err.message || "Payment failed. Please try again.");
+                }
                 setLoading(false);
             }
             return;
@@ -666,7 +678,36 @@ export default function Payments() {
 
                 {/* ══ STICKY FOOTER ══ */}
                 <div className="pmt-footer">
-                    <div className="pmt-footer-amt">₹{totalMrp}</div>
+                    <div className="pmt-footer-amt">
+                        ₹{totalMrp}
+                        {mounted && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && (
+                            <div style={{ fontSize: "10px", color: "#ef4444", fontWeight: "bold", marginTop: "2px" }}>
+                                [LOCAL DEV]
+                            </div>
+                        )}
+                    </div>
+                    {mounted && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const mockOrderId = `ORD-${Date.now()}`;
+                                window.location.href = `/ordersummdary?order_id=${mockOrderId}`;
+                            }}
+                            style={{
+                                background: "#ef4444",
+                                color: "#fff",
+                                fontWeight: "700",
+                                padding: "8px 16px",
+                                borderRadius: "8px",
+                                border: "none",
+                                fontSize: "12px",
+                                cursor: "pointer",
+                                marginRight: "10px"
+                            }}
+                        >
+                            SIMULATE PAY
+                        </button>
+                    )}
                     <button
                         className="pmt-pay-btn"
                         onClick={handlePay}

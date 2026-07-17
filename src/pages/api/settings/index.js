@@ -156,7 +156,7 @@ async function handlePut(req, res) {
       settings.payment.cashfreeMode = body.payment.cashfreeMode ?? settings.payment.cashfreeMode;
       
       // Update secret key if it's modified and not the masked dummy value
-      if (body.payment.cashfreeSecretKey && !body.payment.cashfreeSecretKey.includes('*****')) {
+      if (body.payment.cashfreeSecretKey && !body.payment.cashfreeSecretKey.includes('*')) {
         settings.payment.cashfreeSecretKey = body.payment.cashfreeSecretKey;
       }
     }

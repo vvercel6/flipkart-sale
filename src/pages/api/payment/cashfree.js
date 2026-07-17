@@ -22,11 +22,45 @@ export default async function handler(req, res) {
       });
     }
 
-    const { cashfreeAppId, cashfreeSecretKey, cashfreeMode } = settings.payment;
+    // Support fallback to environment variables
+    const cashfreeAppId = settings.payment.cashfreeAppId || process.env.CASHFREE_APP_ID;
+    const cashfreeSecretKey = settings.payment.cashfreeSecretKey || process.env.CASHFREE_SECRET_KEY;
+    const cashfreeMode = settings.payment.cashfreeMode || process.env.CASHFREE_MODE || 'sandbox';
+
     if (!cashfreeAppId || !cashfreeSecretKey) {
       return res.status(400).json({
         success: false,
-        message: 'Cashfree App ID or Secret Key is missing. Please configure them in admin settings.',
+        message: 'Cashfree App ID or Secret Key is missing. Please configure them in admin settings or environment variables.',
+      });
+    }
+
+    // 1. Identical key validation
+    if (cashfreeAppId === cashfreeSecretKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cashfree App ID and Secret Key cannot be identical. Please check your settings.',
+      });
+    }
+
+    // 2. Masked key validation
+    if (cashfreeSecretKey.includes('*')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cashfree Secret Key appears to be masked (contains *). Please re-enter and save it in the Admin settings.',
+      });
+    }
+
+    // 3. Mismatched environment mode validation
+    const isSandboxKey = cashfreeAppId.toUpperCase().startsWith('TEST');
+    if (cashfreeMode === 'sandbox' && !isSandboxKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gateway mode is Sandbox, but a Production App ID was provided (Sandbox App IDs must start with "TEST"). Please update your settings.',
+      });
+    } else if (cashfreeMode === 'production' && isSandboxKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'Gateway mode is Production, but a Sandbox App ID was provided (Sandbox App IDs start with "TEST"). Please update your settings.',
       });
     }
 
